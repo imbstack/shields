@@ -506,6 +506,64 @@ cache(function(data, match, sendBadge, request) {
   });
 }));
 
+// taskcluster-github integration.
+camp.route(/^\/taskcluster\/([^\/]+)\/([^\/]+)\/([^\/]+)\.(svg|png|gif|jpg|json)$/,
+cache(function(data, match, sendBadge, request) {
+  var user = match[1];  // eg, strongloop/express
+  var repo = match[2];
+  var branch = match[3];
+  var format = match[4];
+  var apiUrl = 'https://api.github.com/repos/' + user + '/' + repo + '/commits/' + branch + '/statuses';
+  // Using our OAuth App secret grants us 5000 req/hour
+  // instead of the standard 60 req/hour.
+  if (serverSecrets) {
+    apiUrl += '?client_id=' + serverSecrets.gh_client_id
+      + '&client_secret=' + serverSecrets.gh_client_secret;
+  }
+  var badgeData = getBadgeData('taskcluster', data);
+
+  // A special User-Agent is required:
+  // http://developer.github.com/v3/#user-agent-required
+  request(apiUrl, { headers: githubHeaders }, function(err, res, buffer) {
+    if (err != null) {
+      badgeData.text[1] = 'inaccessible';
+      sendBadge(format, badgeData);
+      return;
+    }
+    try {
+      if ((+res.headers['x-ratelimit-remaining']) === 0) {
+        return;  // Hope for the best in the cache.
+      }
+      var data = JSON.parse(buffer);
+      var statuses = data.filter(function(stat) {
+        if (stat.creator) {
+          return stat.creator.login === 'TaskClusterRobot';
+        }
+        return false;
+      });
+      if (statuses.length > 0) {
+        var stat = statuses[0];
+        badgeData.text[1] = stat.state || 'unknown';
+        switch (stat.state) {
+          case 'success':
+            badgeData.colorscheme = null;
+            badgeData.colorB = '#00D8FF';
+            break;
+          case 'pending':
+            badgeData.colorscheme = 'yellow';
+            break;
+          default:
+            badgeData.colorscheme = 'red';
+        }
+      }
+      sendBadge(format, badgeData);
+    } catch(e) {
+      badgeData.text[1] = 'none';
+      sendBadge(format, badgeData);
+    }
+  });
+}));
+
 // Rust download and version integration
 camp.route(/^\/crates\/(d|v|dv|l)\/([A-Za-z0-9_-]+)(?:\/([0-9.]+))?\.(svg|png|gif|jpg|json)$/,
 cache(function (data, match, sendBadge, request) {
